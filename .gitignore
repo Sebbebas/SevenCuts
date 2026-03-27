@@ -1,0 +1,14 @@
+# Build output
+bin/
+obj/
+
+# FFmpeg executables (too large for git)
+ffmpeg/
+
+# Visual Studio
+.vs/
+*.user
+
+# OS
+Thumbs.db
+.DS_Store

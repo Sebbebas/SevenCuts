@@ -1,0 +1,173 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:local="clr-namespace:SevenCuts"
+        x:Class="SevenCuts.MainWindow"
+        Title="SevenCuts"
+        Width="1280" Height="720"
+        MinWidth="900" MinHeight="600"
+        WindowState="Maximized"
+        Background="#1a1a1a">
+
+  <Grid ColumnDefinitions="220,*" RowDefinitions="*,220,32">
+
+    <!-- ===== LEFT: Folder Panel ===== -->
+    <Border Grid.Column="0" Grid.RowSpan="3"
+            Background="#222222" BorderBrush="#444" BorderThickness="0,0,1,0">
+      <DockPanel>
+        <Border DockPanel.Dock="Top" Background="#2a2a2a" Padding="10,8">
+          <TextBlock Text="📁  FOLDERS" Foreground="#cccccc"
+                     FontWeight="Bold" FontSize="12"/>
+        </Border>
+        <Button DockPanel.Dock="Top" x:Name="BtnOpenFolder"
+                Content="+ Open Folder"
+                Margin="8" Padding="8,6"
+                Background="#e8a020" Foreground="White"
+                FontWeight="Bold" FontSize="12"
+                HorizontalAlignment="Stretch"/>
+        <TreeView x:Name="FolderTree" Background="Transparent"
+                  Foreground="#cccccc" FontSize="12"/>
+      </DockPanel>
+    </Border>
+
+    <!-- ===== TOP RIGHT: Playback Window ===== -->
+    <Border Grid.Column="1" Grid.Row="0"
+            Background="#111111" Margin="0,0,0,1">
+      <Grid RowDefinitions="*,48">
+
+        <!-- Video area -->
+        <Grid Grid.Row="0">
+          <TextBlock x:Name="NoClipText" Text="No clip loaded" Foreground="#555"
+                     HorizontalAlignment="Center"
+                     VerticalAlignment="Center" FontSize="14"/>
+          <local:VlcVideoView x:Name="VideoView"
+                              HorizontalAlignment="Stretch"
+                              VerticalAlignment="Stretch"
+                              IsVisible="False"/>
+        </Grid>
+
+        <!-- Playback controls bar -->
+        <Border Grid.Row="1" Background="#1a1a1a"
+                BorderBrush="#444" BorderThickness="0,1,0,0">
+          <StackPanel HorizontalAlignment="Center"
+                      Orientation="Horizontal" Spacing="12" Margin="0,6,0,6">
+            <Button x:Name="BtnSkipBack" Content="⏮" Width="36" Height="36"
+                    Background="#333" Foreground="White"/>
+            <Button x:Name="BtnPlayPause" Content="▶" Width="48" Height="48"
+                    Background="#e8a020" Foreground="White" FontSize="16"/>
+            <Button x:Name="BtnSkipFwd" Content="⏭" Width="36" Height="36"
+                    Background="#333" Foreground="White"/>
+          </StackPanel>
+        </Border>
+
+      </Grid>
+    </Border>
+
+    <!-- ===== MIDDLE RIGHT: Timeline ===== -->
+    <Border Grid.Column="1" Grid.Row="1"
+            Background="#1e1e1e" BorderBrush="#444" BorderThickness="0,1,0,1">
+      <Grid RowDefinitions="28,36,*">
+
+        <!-- Timecode bar -->
+        <Border Grid.Row="0" Background="#2a2a2a" Padding="8,4">
+          <Grid ColumnDefinitions="Auto,*,Auto">
+            <TextBlock x:Name="TimecodeDisplay" Text="00:00:00.000"
+                       Foreground="#e8a020" FontFamily="Consolas"
+                       FontSize="13" VerticalAlignment="Center"/>
+            <StackPanel Grid.Column="1" Orientation="Horizontal"
+                        Spacing="6" HorizontalAlignment="Center">
+              <Button x:Name="BtnSetIn" Content="[ Set In"
+                      Padding="10,2" Background="#2a4a6a"
+                      Foreground="#4ea8e8" FontSize="11" FontWeight="Bold"/>
+              <TextBlock x:Name="InPointDisplay" Text="In: --:--:--"
+                         Foreground="#4ea8e8" FontFamily="Consolas"
+                         FontSize="11" VerticalAlignment="Center"/>
+              <TextBlock Text="  →  " Foreground="#555"
+                         FontSize="11" VerticalAlignment="Center"/>
+              <TextBlock x:Name="OutPointDisplay" Text="Out: --:--:--"
+                         Foreground="#4ec94e" FontFamily="Consolas"
+                         FontSize="11" VerticalAlignment="Center"/>
+              <Button x:Name="BtnSetOut" Content="Set Out ]"
+                      Padding="10,2" Background="#2a4a2a"
+                      Foreground="#4ec94e" FontSize="11" FontWeight="Bold"/>
+            </StackPanel>
+            <Button Grid.Column="2" x:Name="BtnClearPoints"
+                    Content="✕ Clear" Padding="8,2"
+                    Background="#3a2a2a" Foreground="#cc6666"
+                    FontSize="11"/>
+          </Grid>
+        </Border>
+
+        <!-- Toolbar -->
+        <Border Grid.Row="1" Background="#252525"
+                BorderBrush="#444" BorderThickness="0,1,0,1" Padding="8,4">
+          <StackPanel Orientation="Horizontal" Spacing="4">
+            <Button x:Name="BtnToolSelect" Content="V  Select"
+                    Padding="10,3" Background="#e8a020"
+                    Foreground="White" FontSize="11" FontWeight="Bold"/>
+            <Button x:Name="BtnToolRazor" Content="C  Razor"
+                    Padding="10,3" Background="#333"
+                    Foreground="#aaaaaa" FontSize="11" FontWeight="Bold"/>
+            <Button x:Name="BtnToolRipple" Content="B  Ripple"
+                    Padding="10,3" Background="#333"
+                    Foreground="#aaaaaa" FontSize="11" FontWeight="Bold"/>
+            <Border Width="1" Background="#444" Margin="4,0"/>
+            <Button x:Name="BtnAddMarker" Content="M  Marker"
+                    Padding="10,3" Background="#333"
+                    Foreground="#aaaaaa" FontSize="11" FontWeight="Bold"/>
+            <TextBlock x:Name="ToolHintText"
+                       Text="Selection: click segment to select  |  Delete key removes selected"
+                       Foreground="#555" FontSize="11"
+                       VerticalAlignment="Center" Margin="12,0,0,0"/>
+          </StackPanel>
+        </Border>
+
+        <!-- Track area -->
+        <Grid Grid.Row="2" ColumnDefinitions="80,*">
+          <StackPanel Grid.Column="0" Background="#252525" Spacing="0">
+            <Border Height="60" BorderBrush="#444" BorderThickness="0,0,0,1" Padding="8,0">
+              <TextBlock Text="VIDEO" Foreground="#4ea8e8"
+                         FontWeight="Bold" FontSize="11" VerticalAlignment="Center"/>
+            </Border>
+            <Border Height="60" Padding="8,0">
+              <TextBlock Text="AUDIO" Foreground="#4ec94e"
+                         FontWeight="Bold" FontSize="11" VerticalAlignment="Center"/>
+            </Border>
+          </StackPanel>
+
+          <Grid Grid.Column="1" RowDefinitions="60,60">
+            <Border Grid.Row="0" Background="#1a2a3a"
+                    BorderBrush="#4ea8e8" BorderThickness="0,1,0,1"
+                    x:Name="VideoTrack"/>
+            <Border Grid.Row="1" Background="#1a2e1a"
+                    BorderBrush="#4ec94e" BorderThickness="0,0,0,1"
+                    x:Name="AudioTrack"/>
+            <Canvas x:Name="ScrubberCanvas" Grid.RowSpan="2" IsHitTestVisible="True"/>
+          </Grid>
+        </Grid>
+
+      </Grid>
+    </Border>
+
+    <!-- ===== BOTTOM: Status Bar ===== -->
+    <Border Grid.Column="1" Grid.Row="2"
+            Background="#2a2a2a" Padding="12,0">
+      <Grid ColumnDefinitions="*,Auto">
+        <TextBlock x:Name="StatusText" Text="Ready"
+                   Foreground="#888" FontSize="11"
+                   VerticalAlignment="Center"/>
+        <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="4">
+          <Button x:Name="BtnOutputFolder"
+                  Content="📁" Width="30" Height="30"
+                  Background="#3a3a3a" Foreground="#888888"
+                  FontSize="14"
+                  ToolTip.Tip="Export Location: Auto (next to source folder)"/>
+          <Button x:Name="BtnExport"
+                  Content="⬇  EXPORT"
+                  Padding="16,4" Background="#e8a020"
+                  Foreground="White" FontWeight="Bold" FontSize="12"/>
+        </StackPanel>
+      </Grid>
+    </Border>
+
+  </Grid>
+</Window>
