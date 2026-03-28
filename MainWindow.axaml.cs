@@ -25,6 +25,19 @@ namespace SevenCuts
         private string? _currentFilePath = null;
         private string? _customOutputPath = null;
 
+        private double _lastMouseX = -1;
+        private double _razorInputX = 0;
+
+        //Segments
+        private Segment? _movingSegment = null;
+        private long _moveDragOffsetMs = 0;
+
+        // Scrubber
+        private bool _isScrubbing = false;
+        private bool _wasPlayingBeforeScrub = false;
+        private bool _hoveringPlayhead = false;
+        private long _razorPreviewMs = -1;
+
         private LibVLC? _libVLC;
         private MediaPlayer? _mediaPlayer;
 
@@ -73,12 +86,83 @@ namespace SevenCuts
             ScrubberCanvas.PointerMoved += OnCanvasPointerMoved;
             ScrubberCanvas.PointerReleased += OnCanvasPointerReleased;
 
+            RazorTextBox.TextChanged += (s, te) =>
+            {
+                if (RazorTextBox.Tag is bool busy && busy) return;
+                RazorTextBox.Tag = true; // prevent re-entry
+
+                // Strip everything except digits
+                string digits = new string(RazorTextBox.Text?.Where(char.IsDigit).ToArray() ?? Array.Empty<char>());
+                if (digits.Length > 9) digits = digits[..9];
+
+                // Rebuild as HH:MM:SS.mmm
+                string formatted = "";
+                for (int i = 0; i < digits.Length; i++)
+                {
+                    if (i == 2 || i == 4) formatted += ":";
+                    if (i == 6) formatted += ".";
+                    formatted += digits[i];
+                }
+
+                RazorTextBox.Text = formatted;
+                RazorTextBox.CaretIndex = formatted.Length;
+
+                // Validate and color the text
+                bool valid = TimeSpan.TryParseExact(formatted,
+                    new[] { @"hh\:mm\:ss\.fff", @"mm\:ss\.fff", @"mm\:ss", @"hh\:mm\:ss" },
+                    null, out TimeSpan parsed)
+                    && (long)parsed.TotalMilliseconds > 0
+                    && (long)parsed.TotalMilliseconds < (_mediaPlayer?.Length ?? 0);
+
+                RazorTextBox.Foreground = new SolidColorBrush(
+                    valid ? Color.Parse("#44cc44") : Color.Parse("#ff4444"));
+                RazorDurationHint.Foreground = new SolidColorBrush(
+                    valid ? Color.Parse("#44cc44") : Color.Parse("#888888"));
+
+                RazorTextBox.Tag = false;
+            };
+
+            RazorTextBox.KeyDown += (s, ke) =>
+            {
+                if (ke.Key == Key.Enter)
+                {
+                    ke.Handled = true;
+                    if (TimeSpan.TryParseExact(RazorTextBox.Text,
+                        new[] { @"hh\:mm\:ss\.fff", @"mm\:ss\.fff", @"mm\:ss", @"hh\:mm\:ss" },
+                        null, out TimeSpan result))
+                    {
+                        long ms = (long)result.TotalMilliseconds;
+                        if (ms <= 0 || ms >= (_mediaPlayer?.Length ?? 0))
+                        {
+                            ShakeRazorInput();
+                            return;
+                        }
+                        RazorTextBox.IsVisible = false;
+                        RazorDurationHint.IsVisible = false;
+                        RazorCutAt(ms);
+                        StatusText.Text = $"Cut at {FormatTime(ms)}";
+                    }
+                    else
+                    {
+                        ShakeRazorInput();
+                    }
+                }
+            };
+
+            ScrubberCanvas.PointerExited += (s, e) =>
+            {
+                _razorPreviewMs = -1;
+                ScrubberCanvas.Cursor = new Cursor(StandardCursorType.Arrow);
+            };
+
             this.Opened += (s, e) =>
             {
                 if (VideoView.VideoHandle != IntPtr.Zero)
                     _mediaPlayer!.Hwnd = VideoView.VideoHandle;
             };
+
             this.KeyDown += OnKeyDown;
+            this.AddHandler(KeyDownEvent, OnWindowKeyDown, Avalonia.Interactivity.RoutingStrategies.Tunnel);
 
             _uiTimer = new DispatcherTimer
             {
@@ -86,11 +170,27 @@ namespace SevenCuts
             };
             _uiTimer.Tick += OnUiTimerTick;
             _uiTimer.Start();
+
+            _mediaPlayer.EndReached += (s, e) =>
+            {
+                Dispatcher.UIThread.Post(() =>
+                {
+                    _mediaPlayer.Stop();
+                    _mediaPlayer.Play();
+                    _mediaPlayer.SetPause(true);
+                    _stopwatchOffsetMs = 0;
+                    _playbackStopwatch.Stop();
+                    BtnPlayPause.Content = "▶";
+                });
+            };
         }
 
         // ─── Tool Switching ───────────────────────────────────────────────────
         private void SetTool(EditTool tool)
         {
+            _razorPreviewMs = -1;
+            _lastMouseX = -1;
+
             _currentTool = tool;
             var orange = new SolidColorBrush(Color.Parse("#e8a020"));
             var grey = new SolidColorBrush(Color.Parse("#333333"));
@@ -106,7 +206,7 @@ namespace SevenCuts
             ToolHintText.Text = tool switch
             {
                 EditTool.Selection => "Selection: click segment to select  |  drag edge to trim  |  Delete removes selected",
-                EditTool.Razor => "Razor: click on timeline to cut at that point",
+                EditTool.Razor => "Razor: click on timeline to cut  |  Tab to type exact timestamp",
                 EditTool.Ripple => "Ripple: drag edge — subsequent segments shift automatically",
                 _ => ""
             };
@@ -136,6 +236,15 @@ namespace SevenCuts
             }
 
             TimecodeDisplay.Text = FormatTime(current);
+
+            if (!RazorTextBox.IsVisible)
+            {
+                if (_currentTool == EditTool.Razor && _lastMouseX >= 0 && duration > 0)
+                    _razorPreviewMs = (long)(Math.Clamp(_lastMouseX / ScrubberCanvas.Bounds.Width, 0, 1) * duration);
+                else if (_currentTool != EditTool.Razor)
+                    _razorPreviewMs = -1;
+            }
+
             DrawTimeline(current, duration);
         }
 
@@ -147,7 +256,7 @@ namespace SevenCuts
                 ? _stopwatchOffsetMs + _playbackStopwatch.ElapsedMilliseconds
                 : _mediaPlayer.Time;
             _markers.Add(t);
-            StatusText.Text = $"Marker added at {FormatTimeShort(t)}";
+            StatusText.Text = $"Marker added at {FormatTime(t)}";
         }
 
         // ─── Canvas Interaction ───────────────────────────────────────────────
@@ -168,7 +277,6 @@ namespace SevenCuts
 
                 case EditTool.Selection:
                 case EditTool.Ripple:
-                    // Check for edge drag first
                     var (seg, isStart) = FindEdgeAt(x, w, duration);
                     if (seg != null)
                     {
@@ -176,36 +284,95 @@ namespace SevenCuts
                         _draggingStart = isStart;
                         break;
                     }
-                    // Otherwise select segment or scrub
-                    var clicked = FindSegmentAt(clickMs);
-                    if (clicked != null)
+
+                    var midSeg = FindSegmentAt(clickMs);
+                    if (midSeg != null)
                     {
-                        SelectSegment(clicked);
+                        SelectSegment(midSeg);
+                        _movingSegment = midSeg;
+                        _moveDragOffsetMs = clickMs - midSeg.StartMs;
+                        break;
                     }
-                    else
+
+                    double playheadX = (_stopwatchOffsetMs +
+                        (_mediaPlayer.IsPlaying ? _playbackStopwatch.ElapsedMilliseconds : 0))
+                        / (double)duration * w;
+
+                    if (Math.Abs(x - playheadX) <= 16)
                     {
-                        SelectSegment(null);
+                        _isScrubbing = true;
+                        _wasPlayingBeforeScrub = _mediaPlayer.IsPlaying;
+                        _mediaPlayer.SetPause(true);
+                        _playbackStopwatch.Stop();
+                        BtnPlayPause.Content = "▶";
                         SeekTo(x, w);
+                        break;
                     }
+
+                    SelectSegment(null);
+                    SeekTo(x, w);
                     break;
             }
         }
 
         private void OnCanvasPointerMoved(object? sender, PointerEventArgs e)
         {
+            double duration = _mediaPlayer?.Length ?? 0;
+            _lastMouseX = e.GetPosition(ScrubberCanvas).X;
+            double x = _lastMouseX;
+            double w = ScrubberCanvas.Bounds.Width;
+
+            if (duration > 0)
+            {
+                double playheadX = (_stopwatchOffsetMs +
+                    (_mediaPlayer!.IsPlaying ? _playbackStopwatch.ElapsedMilliseconds : 0))
+                    / duration * w;
+                _hoveringPlayhead = Math.Abs(x - playheadX) <= 16;
+            }
+
+            if (_currentTool == EditTool.Razor)
+                _razorPreviewMs = (long)(Math.Clamp(x / w, 0, 1) * duration);
+            else
+                _razorPreviewMs = -1;
+
+            if (_currentTool == EditTool.Razor)
+                ScrubberCanvas.Cursor = new Cursor(StandardCursorType.Cross);
+            else if (_hoveringPlayhead || _isScrubbing)
+                ScrubberCanvas.Cursor = new Cursor(StandardCursorType.SizeWestEast);
+            else if (FindSegmentAt((long)((x / w) * duration)) != null)
+                ScrubberCanvas.Cursor = new Cursor(StandardCursorType.SizeAll);
+            else if (FindEdgeAt(x, w, duration).seg != null)
+                ScrubberCanvas.Cursor = new Cursor(StandardCursorType.SizeWestEast);
+            else
+                ScrubberCanvas.Cursor = new Cursor(StandardCursorType.Arrow);
+
             if (_mediaPlayer == null || _mediaPlayer.Length <= 0) return;
             if (!e.GetCurrentPoint(ScrubberCanvas).Properties.IsLeftButtonPressed) return;
 
-            double x = e.GetPosition(ScrubberCanvas).X;
-            double w = ScrubberCanvas.Bounds.Width;
-            double duration = _mediaPlayer.Length;
-            long dragMs = (long)Math.Clamp(x / w, 0, 1) * _mediaPlayer.Length;
+            if (_dragSegment != null)
+            {
+                long dragMs = (long)(Math.Clamp(x / w, 0, 1) * _mediaPlayer.Length);
+                DragEdge(_dragSegment, _draggingStart, dragMs);
+            }
+            else if (_isScrubbing)
+            {
+                SeekTo(x, w);
+            }
 
             if (_dragSegment != null)
             {
+                long dragMs = (long)(Math.Clamp(x / w, 0, 1) * _mediaPlayer.Length);
                 DragEdge(_dragSegment, _draggingStart, dragMs);
             }
-            else if (_currentTool == EditTool.Selection && _selectedSegment == null)
+            else if (_movingSegment != null)
+            {
+                long newStart = (long)(Math.Clamp(x / w, 0, 1) * _mediaPlayer.Length) - _moveDragOffsetMs;
+                long duration2 = _movingSegment.DurationMs;
+                newStart = Math.Clamp(newStart, 0, _mediaPlayer.Length - duration2);
+                _movingSegment.StartMs = newStart;
+                _movingSegment.EndMs = newStart + duration2;
+            }
+            else if (_isScrubbing)
             {
                 SeekTo(x, w);
             }
@@ -214,6 +381,19 @@ namespace SevenCuts
         private void OnCanvasPointerReleased(object? sender, PointerReleasedEventArgs e)
         {
             _dragSegment = null;
+            _movingSegment = null;
+
+            if (_isScrubbing)
+            {
+                _isScrubbing = false;
+                if (_wasPlayingBeforeScrub)
+                {
+                    _mediaPlayer?.Play();
+                    _stopwatchOffsetMs = _mediaPlayer!.Time;
+                    _playbackStopwatch.Restart();
+                    BtnPlayPause.Content = "⏸";
+                }
+            }
         }
 
         // ─── Segment Operations ───────────────────────────────────────────────
@@ -231,71 +411,30 @@ namespace SevenCuts
             _segments.Insert(idx, right);
             _segments.Insert(idx, left);
 
-            StatusText.Text = $"Cut at {FormatTimeShort(ms)}";
+            StatusText.Text = $"Cut at {FormatTime(ms)}";
         }
 
         private void SelectSegment(Segment? seg)
         {
-            if (_selectedSegment != null)
-                _selectedSegment.IsSelected = false;
+            if (_selectedSegment != null) _selectedSegment.IsSelected = false;
             _selectedSegment = seg;
-            if (_selectedSegment != null)
-                _selectedSegment.IsSelected = true;
+            if (_selectedSegment != null) _selectedSegment.IsSelected = true;
         }
 
         private void DeleteSelectedSegment()
         {
             if (_selectedSegment == null) return;
+            StatusText.Text = $"Deleted segment ({FormatTime(_selectedSegment.DurationMs)})";
             _segments.Remove(_selectedSegment);
-
-            // Ripple: shift all segments after the gap left
-            long gap = _selectedSegment.DurationMs;
-            long gapStart = _selectedSegment.StartMs;
-            foreach (var s in _segments.Where(s => s.StartMs >= gapStart))
-            {
-                s.StartMs -= gap;
-                s.EndMs -= gap;
-            }
-
-            StatusText.Text = $"Deleted segment ({FormatTimeShort(_selectedSegment.DurationMs)})";
             _selectedSegment = null;
         }
 
         private void DragEdge(Segment seg, bool isStart, long ms)
         {
-            bool isRipple = _currentTool == EditTool.Ripple;
-            long delta;
-
             if (isStart)
-            {
-                ms = Math.Clamp(ms, seg.StartMs, seg.EndMs - 100);
-                delta = ms - seg.StartMs;
-                seg.StartMs = ms;
-                if (isRipple)
-                {
-                    // Shift all segments before this one
-                    foreach (var s in _segments.Where(s => s.EndMs <= seg.StartMs))
-                    {
-                        s.StartMs -= delta;
-                        s.EndMs -= delta;
-                    }
-                }
-            }
+                seg.StartMs = Math.Clamp(ms, 0, seg.EndMs - 100);
             else
-            {
-                ms = Math.Clamp(ms, seg.StartMs + 100, _mediaPlayer!.Length);
-                delta = ms - seg.EndMs;
-                seg.EndMs = ms;
-                if (isRipple)
-                {
-                    // Shift all segments after this one
-                    foreach (var s in _segments.Where(s => s.StartMs >= seg.EndMs - delta))
-                    {
-                        s.StartMs += delta;
-                        s.EndMs += delta;
-                    }
-                }
-            }
+                seg.EndMs = Math.Clamp(ms, seg.StartMs + 100, _mediaPlayer!.Length);
         }
 
         private Segment? FindSegmentAt(long ms)
@@ -326,9 +465,80 @@ namespace SevenCuts
         private void DrawTimeline(long currentMs, long durationMs)
         {
             ScrubberCanvas.Children.Clear();
+
             double w = ScrubberCanvas.Bounds.Width;
             double h = ScrubberCanvas.Bounds.Height;
             if (w <= 0 || durationMs <= 0) return;
+
+
+            // Razor preview line
+            if (_razorPreviewMs >= 0 && _currentTool == EditTool.Razor && !RazorTextBox.IsVisible)
+            {
+                double rx = (_razorPreviewMs / (double)durationMs) * w;
+                ScrubberCanvas.Children.Add(new Line
+                {
+                    StartPoint = new Avalonia.Point(rx, 0),
+                    EndPoint = new Avalonia.Point(rx, h),
+                    Stroke = new SolidColorBrush(Color.Parse("#ff4444")),
+                    StrokeThickness = 1,
+                    StrokeDashArray = new Avalonia.Collections.AvaloniaList<double> { 4, 4 }
+                });
+
+                // Time label
+                var label = new TextBlock
+                {
+                    Text = FormatTime(_razorPreviewMs),
+                    Foreground = new SolidColorBrush(Color.Parse("#ff4444")),
+                    FontSize = 10,
+                    FontFamily = new FontFamily("Consolas")
+                };
+                Canvas.SetLeft(label, rx + 4);
+                Canvas.SetTop(label, 2);
+                ScrubberCanvas.Children.Add(label);
+
+                // TAB hint badge
+                var tabBadge = new Border
+                {
+                    Background = new SolidColorBrush(Color.Parse("#ff4444")),
+                    CornerRadius = new Avalonia.CornerRadius(3),
+                    Padding = new Avalonia.Thickness(4, 2),
+                    Child = new TextBlock
+                    {
+                        Text = "TAB to type",
+                        Foreground = Brushes.White,
+                        FontSize = 9,
+                        FontWeight = Avalonia.Media.FontWeight.Bold
+                    }
+                };
+                Canvas.SetLeft(tabBadge, rx + 4);
+                Canvas.SetTop(tabBadge, h - 20);
+                ScrubberCanvas.Children.Add(tabBadge);
+            }
+
+            // ENTER hint when input box is open
+            if (RazorTextBox.IsVisible && _currentTool == EditTool.Razor)
+            {
+                double rx = (_razorPreviewMs >= 0)
+                    ? (_razorPreviewMs / (double)durationMs) * w
+                    : RazorTextBox.Margin.Left;
+
+                var enterBadge = new Border
+                {
+                    Background = new SolidColorBrush(Color.Parse("#e8a020")),
+                    CornerRadius = new Avalonia.CornerRadius(3),
+                    Padding = new Avalonia.Thickness(4, 2),
+                    Child = new TextBlock
+                    {
+                        Text = "ENTER to cut  •  ESC to cancel",
+                        Foreground = Brushes.White,
+                        FontSize = 9,
+                        FontWeight = Avalonia.Media.FontWeight.Bold
+                    }
+                };
+                Canvas.SetLeft(enterBadge, RazorTextBox.Margin.Left);
+                Canvas.SetTop(enterBadge, RazorTextBox.Margin.Top + 32);
+                ScrubberCanvas.Children.Add(enterBadge);
+            }
 
             // Draw segments
             foreach (var seg in _segments)
@@ -337,7 +547,6 @@ namespace SevenCuts
                 double x2 = (seg.EndMs / (double)durationMs) * w;
                 double segW = x2 - x1;
 
-                // Video track block (top half)
                 var videoBlock = new Rectangle
                 {
                     Width = segW,
@@ -350,7 +559,6 @@ namespace SevenCuts
                 Canvas.SetTop(videoBlock, 0);
                 ScrubberCanvas.Children.Add(videoBlock);
 
-                // Audio track block (bottom half)
                 var audioBlock = new Rectangle
                 {
                     Width = segW,
@@ -363,7 +571,6 @@ namespace SevenCuts
                 Canvas.SetTop(audioBlock, h / 2);
                 ScrubberCanvas.Children.Add(audioBlock);
 
-                // Segment borders
                 var border = new Rectangle
                 {
                     Width = segW,
@@ -379,7 +586,22 @@ namespace SevenCuts
                 ScrubberCanvas.Children.Add(border);
             }
 
-            // Draw In/Out markers
+            // Draw In/Out highlight region
+            if (_inPoint >= 0 && _outPoint > _inPoint)
+            {
+                double x1 = (_inPoint / (double)durationMs) * w;
+                double x2 = (_outPoint / (double)durationMs) * w;
+                var highlight = new Rectangle
+                {
+                    Width = x2 - x1,
+                    Height = h,
+                    Fill = new SolidColorBrush(Color.FromArgb(40, 255, 255, 255))
+                };
+                Canvas.SetLeft(highlight, x1);
+                Canvas.SetTop(highlight, 0);
+                ScrubberCanvas.Children.Add(highlight);
+            }
+
             if (_inPoint >= 0)
             {
                 double inX = (_inPoint / (double)durationMs) * w;
@@ -391,6 +613,7 @@ namespace SevenCuts
                     StrokeThickness = 2
                 });
             }
+
             if (_outPoint >= 0 && _outPoint > _inPoint)
             {
                 double outX = (_outPoint / (double)durationMs) * w;
@@ -426,12 +649,16 @@ namespace SevenCuts
 
             // Draw playhead
             double playX = (currentMs / (double)durationMs) * w;
+            var playheadColor = _hoveringPlayhead
+                ? Color.Parse("#ffffff")
+                : Color.Parse("#e8a020");
+
             ScrubberCanvas.Children.Add(new Line
             {
                 StartPoint = new Avalonia.Point(playX, 0),
                 EndPoint = new Avalonia.Point(playX, h),
-                Stroke = new SolidColorBrush(Color.Parse("#e8a020")),
-                StrokeThickness = 2
+                Stroke = new SolidColorBrush(playheadColor),
+                StrokeThickness = _hoveringPlayhead ? 3 : 2
             });
             ScrubberCanvas.Children.Add(new Polygon
             {
@@ -439,8 +666,39 @@ namespace SevenCuts
                 {
                     new(playX - 5, 0), new(playX + 5, 0), new(playX, 10)
                 },
-                Fill = new SolidColorBrush(Color.Parse("#e8a020"))
+                Fill = new SolidColorBrush(playheadColor)
             });
+
+            // Draw gap markers between segments
+            var sorted = _segments.OrderBy(s => s.StartMs).ToList();
+            for (int i = 0; i < sorted.Count - 1; i++)
+            {
+                double gapX1 = (sorted[i].EndMs / (double)durationMs) * w;
+                double gapX2 = (sorted[i + 1].StartMs / (double)durationMs) * w;
+                if (gapX2 - gapX1 > 2)
+                {
+                    var gapRect = new Rectangle
+                    {
+                        Width = gapX2 - gapX1,
+                        Height = h,
+                        Fill = new SolidColorBrush(Color.FromArgb(120, 0, 0, 0))
+                    };
+                    Canvas.SetLeft(gapRect, gapX1);
+                    Canvas.SetTop(gapRect, 0);
+                    ScrubberCanvas.Children.Add(gapRect);
+
+                    var gapLabel = new TextBlock
+                    {
+                        Text = "GAP",
+                        Foreground = new SolidColorBrush(Color.Parse("#555555")),
+                        FontSize = 9,
+                        FontWeight = Avalonia.Media.FontWeight.Bold
+                    };
+                    Canvas.SetLeft(gapLabel, gapX1 + (gapX2 - gapX1) / 2 - 10);
+                    Canvas.SetTop(gapLabel, h / 2 - 6);
+                    ScrubberCanvas.Children.Add(gapLabel);
+                }
+            }
         }
 
         // ─── Folder / File Loading ────────────────────────────────────────────
@@ -518,6 +776,7 @@ namespace SevenCuts
             _mediaPlayer?.SetRate(1.0f);
             _currentFilePath = filePath;
             StatusText.Text = $"Loaded: {System.IO.Path.GetFileName(filePath)}";
+            RazorDurationHint.IsVisible = false;
             NoClipText.IsVisible = false;
             VideoView.IsVisible = true;
 
@@ -528,28 +787,38 @@ namespace SevenCuts
 
             _markers.Clear();
             _selectedSegment = null;
+            RazorTextBox.IsVisible = false;
 
             var media = new Media(_libVLC!, new Uri(filePath));
             _mediaPlayer!.Media = media;
 
-            // Wait briefly for VLC to get the duration, then init segments
             _segments.Clear();
             _mediaPlayer.Play();
             _stopwatchOffsetMs = 0;
             _playbackStopwatch.Restart();
             BtnPlayPause.Content = "⏸";
 
-            // Init the single full-clip segment after a short delay
             var initTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(400) };
             initTimer.Tick += (s, ev) =>
             {
                 initTimer.Stop();
                 if (_mediaPlayer.Length > 0 && _segments.Count == 0)
-                {
                     _segments.Add(new Segment { StartMs = 0, EndMs = _mediaPlayer.Length });
-                }
             };
             initTimer.Start();
+
+            _mediaPlayer.EndReached += (s, e) =>
+            {
+                Dispatcher.UIThread.Post(() =>
+                {
+                    _mediaPlayer.Stop();
+                    _mediaPlayer.Play();
+                    _mediaPlayer.SetPause(true);
+                    _stopwatchOffsetMs = 0;
+                    _playbackStopwatch.Stop();
+                    BtnPlayPause.Content = "▶";
+                });
+            };
         }
 
         // ─── Playback Controls ────────────────────────────────────────────────
@@ -594,8 +863,8 @@ namespace SevenCuts
             _inPoint = _mediaPlayer.IsPlaying
                 ? _stopwatchOffsetMs + _playbackStopwatch.ElapsedMilliseconds
                 : _mediaPlayer.Time;
-            InPointDisplay.Text = $"In: {FormatTimeShort(_inPoint)}";
-            StatusText.Text = $"In point set at {FormatTimeShort(_inPoint)}";
+            InPointDisplay.Text = $"In: {FormatTime(_inPoint)}";
+            StatusText.Text = $"In point set at {FormatTime(_inPoint)}";
         }
 
         private void OnSetOutClick(object? sender, RoutedEventArgs e)
@@ -604,8 +873,8 @@ namespace SevenCuts
             _outPoint = _mediaPlayer.IsPlaying
                 ? _stopwatchOffsetMs + _playbackStopwatch.ElapsedMilliseconds
                 : _mediaPlayer.Time;
-            OutPointDisplay.Text = $"Out: {FormatTimeShort(_outPoint)}";
-            StatusText.Text = $"Out point set at {FormatTimeShort(_outPoint)}";
+            OutPointDisplay.Text = $"Out: {FormatTime(_outPoint)}";
+            StatusText.Text = $"Out point set at {FormatTime(_outPoint)}";
         }
 
         private void OnClearPointsClick(object? sender, RoutedEventArgs e)
@@ -618,35 +887,61 @@ namespace SevenCuts
         }
 
         // ─── Keyboard Shortcuts ───────────────────────────────────────────────
+        private void OnWindowKeyDown(object? sender, KeyEventArgs e)
+        {
+            // Tab opens razor timestamp input
+            if (e.Key == Key.Tab && _currentTool == EditTool.Razor && _lastMouseX >= 0)
+            {
+                e.Handled = true;
+                if (RazorTextBox.IsVisible) return;
+
+                long snappedMs = _razorPreviewMs;
+                RazorTextBox.Text = FormatTime(snappedMs);
+                _razorInputX = Math.Min(_lastMouseX, ScrubberCanvas.Bounds.Width - 130);
+                RazorTextBox.Margin = new Avalonia.Thickness(
+                    _razorInputX, ScrubberCanvas.Bounds.Height / 2 - 12, 0, 0);
+                RazorTextBox.IsVisible = true;
+                RazorDurationHint.Text = $"  {FormatTime(_mediaPlayer?.Length ?? 0)}";
+                RazorDurationHint.Margin = new Avalonia.Thickness(_razorInputX, RazorTextBox.Margin.Top + 20, 0, 0); RazorDurationHint.IsVisible = true;
+                RazorTextBox.CaretIndex = RazorTextBox.Text.Length;
+                RazorTextBox.Focus();
+                return;
+            }
+
+            // Escape closes it
+            if (e.Key == Key.Escape && RazorTextBox.IsVisible)
+            {
+                e.Handled = true;
+                RazorTextBox.IsVisible = false;
+                RazorDurationHint.IsVisible = false;
+                return;
+            }
+
+            // Block all nav keys while input is open
+            if (RazorTextBox.IsVisible)
+            {
+                if (e.Key == Key.Left || e.Key == Key.Right ||
+                    e.Key == Key.Up || e.Key == Key.Down)
+                    e.Handled = true;
+            }
+        }
+
         private void OnKeyDown(object? sender, KeyEventArgs e)
         {
+            if (RazorTextBox.IsVisible) return;
             if (_mediaPlayer == null) return;
+
             switch (e.Key)
             {
-                case Key.Space:
-                    OnPlayPauseClick(null, null!);
-                    break;
-                case Key.I:
-                    OnSetInClick(null, null!);
-                    break;
-                case Key.O:
-                    OnSetOutClick(null, null!);
-                    break;
-                case Key.M:
-                    OnAddMarkerClick(null, null!);
-                    break;
-                case Key.V:
-                    SetTool(EditTool.Selection);
-                    break;
-                case Key.C:
-                    SetTool(EditTool.Razor);
-                    break;
-                case Key.B:
-                    SetTool(EditTool.Ripple);
-                    break;
-                case Key.Delete:
-                    DeleteSelectedSegment();
-                    break;
+                case Key.Space: OnPlayPauseClick(null, null!); break;
+                case Key.I: OnSetInClick(null, null!); break;
+                case Key.O: OnSetOutClick(null, null!); break;
+                case Key.M: OnAddMarkerClick(null, null!); break;
+                case Key.V: SetTool(EditTool.Selection); break;
+                case Key.C: SetTool(EditTool.Razor); break;
+                case Key.B: SetTool(EditTool.Ripple); break;
+                case Key.Delete: DeleteSelectedSegment(); break;
+
                 case Key.K:
                     _mediaPlayer.SetPause(true);
                     _mediaPlayer.SetRate(1.0f);
@@ -654,6 +949,7 @@ namespace SevenCuts
                     _playbackStopwatch.Stop();
                     BtnPlayPause.Content = "▶";
                     break;
+
                 case Key.L:
                     if (_mediaPlayer.Rate < 0) _playbackRate = 1.0f;
                     else _playbackRate = Math.Min(_playbackRate * 2f, 16f);
@@ -664,6 +960,7 @@ namespace SevenCuts
                     BtnPlayPause.Content = "⏸";
                     StatusText.Text = $"Speed: {_playbackRate}x";
                     break;
+
                 case Key.J:
                     if (_mediaPlayer.Rate > 0) _playbackRate = -1.0f;
                     else _playbackRate = Math.Max(_playbackRate * 2f, -16f);
@@ -675,6 +972,27 @@ namespace SevenCuts
                     StatusText.Text = $"Speed: {_playbackRate}x";
                     break;
             }
+        }
+
+        private void ShakeRazorInput()
+        {
+            int shakeCount = 0;
+            var shakeTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(40) };
+            shakeTimer.Tick += (s, ev) =>
+            {
+                shakeCount++;
+                double offsetX = shakeCount % 2 == 0 ? _razorInputX : _razorInputX + 6;
+                double topBox = ScrubberCanvas.Bounds.Height / 2 - 12;
+                RazorTextBox.Margin = new Avalonia.Thickness(offsetX, topBox, 0, 0);
+                RazorDurationHint.Margin = new Avalonia.Thickness(offsetX, topBox + 20, 0, 0);
+                if (shakeCount >= 10)
+                {
+                    shakeTimer.Stop();
+                    RazorTextBox.Margin = new Avalonia.Thickness(_razorInputX, topBox, 0, 0);
+                    RazorDurationHint.Margin = new Avalonia.Thickness(_razorInputX, topBox + 20, 0, 0);
+                }
+            };
+            shakeTimer.Start();
         }
 
         // ─── Export ───────────────────────────────────────────────────────────
@@ -720,7 +1038,6 @@ namespace SevenCuts
             {
                 if (_segments.Count == 1)
                 {
-                    // Single segment — simple cut
                     var seg = _segments[0];
                     var start = TimeSpan.FromMilliseconds(seg.StartMs);
                     var duration = TimeSpan.FromMilliseconds(seg.DurationMs);
@@ -731,7 +1048,6 @@ namespace SevenCuts
                 }
                 else
                 {
-                    // Multiple segments — cut each then concat
                     string tempDir = System.IO.Path.Combine(outputDir, "_sevcuts_temp");
                     Directory.CreateDirectory(tempDir);
                     var tempFiles = new List<string>();
@@ -749,15 +1065,12 @@ namespace SevenCuts
                         tempFiles.Add(temp);
                     }
 
-                    // Write concat list
                     string listFile = System.IO.Path.Combine(tempDir, "concat.txt");
                     File.WriteAllLines(listFile, tempFiles.Select(f => $"file '{f}'"));
 
                     StatusText.Text = "Joining segments...";
                     string concatArgs = $"-y -f concat -safe 0 -i \"{listFile}\" -c copy \"{outputFilePath}\"";
                     await FFmpeg.Conversions.New().Start(concatArgs);
-
-                    // Cleanup temp files
                     Directory.Delete(tempDir, true);
                 }
 
@@ -803,7 +1116,11 @@ namespace SevenCuts
                 BtnExport.Margin = shakeCount % 2 == 0
                     ? new Avalonia.Thickness(0)
                     : new Avalonia.Thickness(6, 0, 0, 0);
-                if (shakeCount >= 10) { shakeTimer.Stop(); BtnExport.Margin = new Avalonia.Thickness(0); }
+                if (shakeCount >= 10)
+                {
+                    shakeTimer.Stop();
+                    BtnExport.Margin = new Avalonia.Thickness(0);
+                }
             };
             shakeTimer.Start();
         }

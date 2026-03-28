@@ -52,8 +52,10 @@
                       Orientation="Horizontal" Spacing="12" Margin="0,6,0,6">
             <Button x:Name="BtnSkipBack" Content="⏮" Width="36" Height="36"
                     Background="#333" Foreground="White"/>
-            <Button x:Name="BtnPlayPause" Content="▶" Width="48" Height="48"
-                    Background="#e8a020" Foreground="White" FontSize="16"/>
+			  <Button x:Name="BtnPlayPause" Content="▶" Width="48" Height="48"
+					  Background="#e8a020" Foreground="White" FontSize="16"
+					  HorizontalContentAlignment="Center"
+					  VerticalContentAlignment="Center"/>
             <Button x:Name="BtnSkipFwd" Content="⏭" Width="36" Height="36"
                     Background="#333" Foreground="White"/>
           </StackPanel>
@@ -141,7 +143,24 @@
             <Border Grid.Row="1" Background="#1a2e1a"
                     BorderBrush="#4ec94e" BorderThickness="0,0,0,1"
                     x:Name="AudioTrack"/>
-            <Canvas x:Name="ScrubberCanvas" Grid.RowSpan="2" IsHitTestVisible="True"/>
+			  <Canvas x:Name="ScrubberCanvas" Grid.RowSpan="2" IsHitTestVisible="True"/>
+			  <Canvas x:Name="OverlayCanvas"  Grid.RowSpan="2" IsHitTestVisible="True"/>
+			  <TextBox x:Name="RazorTextBox"
+					   Grid.RowSpan="2"
+					   Width="120" Height="24"
+					   FontFamily="Consolas" FontSize="11"
+					   Background="#1a1a1a" Foreground="#ff4444"
+					   BorderBrush="#ff4444"
+					   IsVisible="False"
+					   HorizontalAlignment="Left"
+					   VerticalAlignment="Top"/>
+			  <TextBlock x:Name="RazorDurationHint"
+						 Grid.RowSpan="2"
+						 FontFamily="Consolas" FontSize="9"
+						 Foreground="#888888"
+						 IsVisible="False"
+						 HorizontalAlignment="Left"
+						 VerticalAlignment="Top"/>
           </Grid>
         </Grid>
 
