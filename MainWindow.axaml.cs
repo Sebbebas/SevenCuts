@@ -467,7 +467,7 @@ namespace SevenCuts
             ScrubberCanvas.Children.Clear();
 
             double w = ScrubberCanvas.Bounds.Width;
-            double h = ScrubberCanvas.Bounds.Height;
+            double h = ScrubberCanvas.Bounds.Height * 2;
             if (w <= 0 || durationMs <= 0) return;
 
 
@@ -540,51 +540,80 @@ namespace SevenCuts
                 ScrubberCanvas.Children.Add(enterBadge);
             }
 
+            // Subtle lane backgrounds
+            ScrubberCanvas.Children.Add(new Rectangle
+            {
+                Width = w,
+                Height = h / 2,
+                Fill = new SolidColorBrush(Color.FromArgb(15, 78, 168, 232))
+            });
+            var audioBg = new Rectangle
+            {
+                Width = w,
+                Height = h / 2,
+                Fill = new SolidColorBrush(Color.FromArgb(15, 78, 201, 78))
+            };
+            Canvas.SetTop(audioBg, h / 2);
+            ScrubberCanvas.Children.Add(audioBg);
+
             // Draw segments
             foreach (var seg in _segments)
             {
                 double x1 = (seg.StartMs / (double)durationMs) * w;
                 double x2 = (seg.EndMs / (double)durationMs) * w;
                 double segW = x2 - x1;
+                double stripH = 20;
+                double gap = 2;
+                double videoY = h / 2 - stripH - gap;
+                double audioY = h / 2 + gap;
 
-                var videoBlock = new Rectangle
+                ScrubberCanvas.Children.Add(new Rectangle
                 {
                     Width = segW,
-                    Height = h / 2,
-                    Fill = seg.IsSelected
-                        ? new SolidColorBrush(Color.FromArgb(180, 78, 168, 232))
-                        : new SolidColorBrush(Color.FromArgb(100, 78, 168, 232))
-                };
-                Canvas.SetLeft(videoBlock, x1);
-                Canvas.SetTop(videoBlock, 0);
-                ScrubberCanvas.Children.Add(videoBlock);
+                    Height = stripH,
+                    Fill = new SolidColorBrush(seg.IsSelected ? Color.FromArgb(220, 78, 168, 232) : Color.FromArgb(180, 78, 168, 232)),
+                    [Canvas.LeftProperty] = x1,
+                    [Canvas.TopProperty] = videoY
+                });
 
-                var audioBlock = new Rectangle
+                ScrubberCanvas.Children.Add(new Rectangle
                 {
                     Width = segW,
-                    Height = h / 2,
-                    Fill = seg.IsSelected
-                        ? new SolidColorBrush(Color.FromArgb(180, 78, 201, 78))
-                        : new SolidColorBrush(Color.FromArgb(100, 78, 201, 78))
-                };
-                Canvas.SetLeft(audioBlock, x1);
-                Canvas.SetTop(audioBlock, h / 2);
-                ScrubberCanvas.Children.Add(audioBlock);
+                    Height = stripH,
+                    Fill = new SolidColorBrush(seg.IsSelected ? Color.FromArgb(220, 78, 201, 78) : Color.FromArgb(180, 78, 201, 78)),
+                    [Canvas.LeftProperty] = x1,
+                    [Canvas.TopProperty] = audioY
+                });
 
-                var border = new Rectangle
-                {
-                    Width = segW,
-                    Height = h,
-                    Fill = Brushes.Transparent,
-                    Stroke = seg.IsSelected
-                        ? new SolidColorBrush(Color.Parse("#e8a020"))
-                        : new SolidColorBrush(Color.Parse("#4ea8e8")),
-                    StrokeThickness = seg.IsSelected ? 2 : 1
-                };
-                Canvas.SetLeft(border, x1);
-                Canvas.SetTop(border, 0);
-                ScrubberCanvas.Children.Add(border);
+                if (seg.IsSelected)
+                    ScrubberCanvas.Children.Add(new Rectangle
+                    {
+                        Width = segW,
+                        Height = stripH * 2 + 4,
+                        Fill = Brushes.Transparent,
+                        Stroke = new SolidColorBrush(Color.Parse("#e8a020")),
+                        StrokeThickness = 2,
+                        [Canvas.LeftProperty] = x1,
+                        [Canvas.TopProperty] = videoY
+                    });
             }
+
+            ScrubberCanvas.Children.Add(new Line
+            {
+                StartPoint = new Avalonia.Point(0, h / 2),
+                EndPoint = new Avalonia.Point(w, h / 2),
+                Stroke = new SolidColorBrush(Color.Parse("#555555")),
+                StrokeThickness = 2
+            });
+
+            // Dividing line between VIDEO and AUDIO rows
+            ScrubberCanvas.Children.Add(new Line
+            {
+                StartPoint = new Avalonia.Point(0, h / 2),
+                EndPoint = new Avalonia.Point(w, h / 2),
+                Stroke = new SolidColorBrush(Color.Parse("#555555")),
+                StrokeThickness = 2
+            });
 
             // Draw In/Out highlight region
             if (_inPoint >= 0 && _outPoint > _inPoint)
@@ -649,10 +678,9 @@ namespace SevenCuts
 
             // Draw playhead
             double playX = (currentMs / (double)durationMs) * w;
-            var playheadColor = _hoveringPlayhead
-                ? Color.Parse("#ffffff")
-                : Color.Parse("#e8a020");
+            var playheadColor = _hoveringPlayhead ? Color.Parse("#ffffff") : Color.Parse("#e8a020");
 
+            // Full height line from top to bottom
             ScrubberCanvas.Children.Add(new Line
             {
                 StartPoint = new Avalonia.Point(playX, 0),
@@ -660,12 +688,14 @@ namespace SevenCuts
                 Stroke = new SolidColorBrush(playheadColor),
                 StrokeThickness = _hoveringPlayhead ? 3 : 2
             });
+
+            // Triangle at very top
             ScrubberCanvas.Children.Add(new Polygon
             {
                 Points = new Avalonia.Collections.AvaloniaList<Avalonia.Point>
-                {
-                    new(playX - 5, 0), new(playX + 5, 0), new(playX, 10)
-                },
+    {
+        new(playX - 6, 0), new(playX + 6, 0), new(playX, 10)
+    },
                 Fill = new SolidColorBrush(playheadColor)
             });
 
@@ -712,6 +742,8 @@ namespace SevenCuts
             if (folders.Count > 0)
             {
                 _rootFolderPath = folders[0].Path.LocalPath;
+                _exportedFiles.Clear();
+                LoadExportedFiles();
                 StatusText.Text = $"Loaded: {_rootFolderPath}";
                 PopulateFolderTree(_rootFolderPath);
             }
@@ -756,10 +788,40 @@ namespace SevenCuts
 
         private TreeViewItem BuildFileItem(string filePath)
         {
-            string icon = _exportedFiles.Contains(filePath) ? "✅" : "🎬";
+            bool exported = _exportedFiles.Contains(filePath);
+
+            // emoji and color selection
+            string iconText = exported ? "✅" : "🎬";
+            var iconColor = exported ? Color.Parse("#4ec94e") : Color.Parse("#4ea8e8");
+
+            // icon TextBlock with colored foreground
+            var iconTextBlock = new TextBlock
+            {
+                Text = iconText,
+                Foreground = new SolidColorBrush(iconColor),
+                FontSize = 14,
+                VerticalAlignment = Avalonia.Layout.VerticalAlignment.Center,
+                Margin = new Avalonia.Thickness(0, 0, 6, 0)
+            };
+
+            // filename TextBlock
+            var fileNameTextBlock = new TextBlock
+            {
+                Text = System.IO.Path.GetFileName(filePath),
+                Foreground = new SolidColorBrush(Color.Parse("#cccccc")),
+                VerticalAlignment = Avalonia.Layout.VerticalAlignment.Center
+            };
+
+            // combine into a horizontal header
+            var headerPanel = new StackPanel
+            {
+                Orientation = Avalonia.Layout.Orientation.Horizontal,
+                Children = { iconTextBlock, fileNameTextBlock }
+            };
+
             return new TreeViewItem
             {
-                Header = $"{icon}  {System.IO.Path.GetFileName(filePath)}",
+                Header = headerPanel,
                 Tag = filePath
             };
         }
@@ -775,7 +837,7 @@ namespace SevenCuts
             _playbackRate = 1.0f;
             _mediaPlayer?.SetRate(1.0f);
             _currentFilePath = filePath;
-            StatusText.Text = $"Loaded: {System.IO.Path.GetFileName(filePath)}";
+            StatusText.Text = $"Loaded: {System.IO.Path.GetFileName(filePath)}"};
             RazorDurationHint.IsVisible = false;
             NoClipText.IsVisible = false;
             VideoView.IsVisible = true;
@@ -1031,6 +1093,72 @@ namespace SevenCuts
             string outputDir = System.IO.Path.GetDirectoryName(outputFilePath)!;
             Directory.CreateDirectory(outputDir);
 
+            // Warn if output file already exists
+            if (File.Exists(outputFilePath))
+            {
+                var dialog = new Window
+                {
+                    Title = "File already exported",
+                    Width = 360,
+                    Height = 150,
+                    WindowStartupLocation = WindowStartupLocation.CenterOwner,
+                    Background = new SolidColorBrush(Color.Parse("#222222")),
+                    CanResize = false
+                };
+
+                bool confirmed = false;
+
+                var yesBtn = new Button
+                {
+                    Content = "Yes, overwrite",
+                    Background = new SolidColorBrush(Color.Parse("#e8a020")),
+                    Foreground = Brushes.White,
+                    Padding = new Avalonia.Thickness(16, 6),
+                    FontWeight = Avalonia.Media.FontWeight.Bold
+                };
+                var noBtn = new Button
+                {
+                    Content = "No, cancel",
+                    Background = new SolidColorBrush(Color.Parse("#333333")),
+                    Foreground = new SolidColorBrush(Color.Parse("#cccccc")),
+                    Padding = new Avalonia.Thickness(16, 6)
+                };
+
+                yesBtn.Click += (_, __) => { confirmed = true; dialog.Close(); };
+                noBtn.Click += (_, __) => { confirmed = false; dialog.Close(); };
+
+                dialog.Content = new StackPanel
+                {
+                    Margin = new Avalonia.Thickness(20),
+                    Spacing = 16,
+                    Children =
+        {
+            new TextBlock
+            {
+                Text       = "This clip has already been exported.\nAre you sure you want to overwrite it?",
+                Foreground = new SolidColorBrush(Color.Parse("#cccccc")),
+                FontSize   = 13,
+                TextWrapping = Avalonia.Media.TextWrapping.Wrap
+            },
+            new StackPanel
+            {
+                Orientation = Avalonia.Layout.Orientation.Horizontal,
+                Spacing     = 10,
+                HorizontalAlignment = Avalonia.Layout.HorizontalAlignment.Right,
+                Children    = { noBtn, yesBtn }
+            }
+        }
+                };
+
+                await dialog.ShowDialog(this);
+
+                if (!confirmed)
+                {
+                    BtnExport.IsEnabled = true;
+                    return;
+                }
+            }
+
             _mediaPlayer?.SetPause(true);
             BtnExport.IsEnabled = false;
 
@@ -1075,6 +1203,7 @@ namespace SevenCuts
                 }
 
                 _exportedFiles.Add(_currentFilePath);
+                SaveExportedFiles();
                 PopulateFolderTree(_rootFolderPath!);
                 StatusText.Text = $"✅ Exported to: {outputFilePath}";
             }
@@ -1124,6 +1253,47 @@ namespace SevenCuts
             };
             shakeTimer.Start();
         }
+
+        private string GetOutputRoot()
+        {
+            if (_customOutputPath != null && Directory.Exists(_customOutputPath))
+            {
+                string rootNameCustom = System.IO.Path.GetFileName(
+                    _rootFolderPath!.TrimEnd(System.IO.Path.DirectorySeparatorChar));
+                return System.IO.Path.Combine(_customOutputPath, $"SevenCuts_{rootNameCustom}");
+            }
+            string cleanRoot = _rootFolderPath!.TrimEnd(System.IO.Path.DirectorySeparatorChar);
+            string rootParent = System.IO.Path.GetDirectoryName(cleanRoot)!;
+            string rootName = System.IO.Path.GetFileName(cleanRoot);
+            return System.IO.Path.Combine(rootParent, $"SevenCuts_{rootName}");
+        }
+
+        private void SaveExportedFiles()
+        {
+            if (_rootFolderPath == null) return;
+            string outputRoot = GetOutputRoot();
+            Directory.CreateDirectory(outputRoot);
+            string jsonPath = System.IO.Path.Combine(outputRoot, "exported.json");
+            File.WriteAllText(jsonPath,
+                System.Text.Json.JsonSerializer.Serialize(_exportedFiles.ToList()));
+        }
+
+        private void LoadExportedFiles()
+        {
+            if (_rootFolderPath == null) return;
+            string outputRoot = GetOutputRoot();
+            string jsonPath = System.IO.Path.Combine(outputRoot, "exported.json");
+            if (!File.Exists(jsonPath)) return;
+            try
+            {
+                var list = System.Text.Json.JsonSerializer.Deserialize<List<string>>(
+                    File.ReadAllText(jsonPath));
+                if (list != null)
+                    foreach (var f in list)
+                        _exportedFiles.Add(f);
+            }
+            catch { }
+        } 
 
         // ─── Helpers ──────────────────────────────────────────────────────────
         private static string FormatTime(long ms)
